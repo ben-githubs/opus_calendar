@@ -9,13 +9,13 @@ import datetime as dt
 import logging
 import urllib.request
 import os # For removing old description files
-import glob
+import re
 
 # Create Logger
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 
 # Important constants
-DESC_DIR = os.path.join(os.getcwd(),"descriptions")
+DESC_DIR = os.path.join("descriptions")
 CALENDAR_DATA_URL = "https://calendar.google.com/calendar/ical/opustutoring%40gmail.com/public/basic.ics"
 
 
@@ -32,7 +32,8 @@ class Event:
         self.description = properties.get("DESCRIPTION", "")
         self.location = properties.get("LOCATION", "")
         self.rrule = properties.get("RRULE", "")
-        self.exdate = properties.get("EXDATE", "")
+        self.exdate = properties.get("EXDATE", [])
+        self.recurrence_id = properties.get("RECURRENCE-ID", "")
         
         # Format variables
         self.dtStart = IcalParser.Str2Datetime(self.dtStart)
@@ -64,6 +65,7 @@ class Event:
         if r:
             # Is this date in the excluded dates?
             if self.exdate and date in self.exdate:
+                print(date)
                 return False
             if "UNTIL" in r.keys() and r["UNTIL"].date() < date:
                 return False
@@ -100,6 +102,7 @@ class Calendar:
     
     def AddEvents(self,eventList): # ...................... Calendar.AddEvents
         self.events += eventList
+        self.UpdateEvents()
     
     def GetEvents(self, date): # .......................... Calendar.GetEvents
         returnlist = list()
@@ -117,6 +120,19 @@ class Calendar:
         dts.sort()
         indices = [orig.index(dt) for dt in dts]
         return [eventList[index] for index in indices]
+    
+    def UpdateEvents(self):
+        """ There's some stuff where events reference each other (for example,
+        recurring events) and this function will go through and make sure those
+        references are a-o-good. """
+        for event in self.events:
+            if event.recurrence_id != "":
+                # We want to find the original:
+                for other in self.events:
+                    if other.uid == event.uid and other.rrule != "":
+                        other.exdate.append(IcalParser.Str2Datetime(
+                                event.recurrence_id).date())
+                        
 
 
 # -----------------------------------------------------------------------------
@@ -209,13 +225,15 @@ class HTMLExport:
     
     def ExportFile(self, fname):
         with open(fname, 'w') as f:
+            self.text = re.sub("(<!--.*?-->)", "", 
+                               self.text, flags=re.MULTILINE) # Remove comments
             f.write(self.text)
             logging.info("Wrote contents to html file.")
     
     def ExportString(self):
         return self.text
-    
-    
+
+
 
 # -----------------------------------------------------------------------------
 # -------------------------------------------------------------- Main Function
@@ -228,7 +246,8 @@ def main():
     
     #  Figure out which dates we should display on the calendar
     today = dt.datetime.today()
-    monday = today+dt.timedelta((0-today.weekday())%7)
+    #monday = today+dt.timedelta((0-today.weekday())%7)
+    monday = dt.date(2018,10,1)
     tuesday = today+dt.timedelta((1-today.weekday())%7)
     wednesday = today+dt.timedelta((2-today.weekday())%7)
     thursday = today+dt.timedelta((3-today.weekday())%7)
@@ -237,7 +256,8 @@ def main():
     # Clean description directory
     logging.debug("{0} files in {1}.".format(len(os.listdir(DESC_DIR)),DESC_DIR))
     for file in os.listdir(DESC_DIR):
-        os.remove(os.path.join(DESC_DIR, file))
+        if not os.path.isdir(file):
+            os.remove(os.path.join(DESC_DIR, file))
     
     html = HTMLExport("temp.html")
     
@@ -255,9 +275,9 @@ def main():
         for event in cal.GetEvents(weekday):
             htmlContent = HTMLExport("description_template.html")
             htmlContent.PlaceAtTag("description", event.description)
-            fname = "desc{}.html".format(len(os.listdir(DESC_DIR)))
+            fname = "desc{}".format(len(os.listdir(DESC_DIR)))
             fname = os.path.join(DESC_DIR, fname)
-            htmlContent.ExportFile(fname)
+            htmlContent.ExportFile(fname+".html")
             
             htmlEvent = HTMLExport("event_template.html")
             htmlEvent.PlaceAtTag("start", event.dtStart.strftime("%H:%M"))
